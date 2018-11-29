@@ -253,6 +253,7 @@ class DistutilsInfo(object):
                     self.values[key] = value
 
     def merge(self, other):
+        print("__DistutilsInfo.merge")
         if other is None:
             return self
         for key, value in other.values.items():
@@ -300,6 +301,16 @@ class DistutilsInfo(object):
             if type in [list, transitive_list]:
                 value = getattr(extension, key) + list(value)
             setattr(extension, key, value)
+
+    def dump(self):
+        r = ":"
+        for key, value in self.values.items():
+            r += "    %s = %s\n" % (key, value)
+        return("Dump myself" + r)
+
+
+
+
 
 
 @cython.locals(start=cython.Py_ssize_t, q=cython.Py_ssize_t,
@@ -473,14 +484,19 @@ def fully_qualified_name(filename):
 
 @cached_function
 def parse_dependencies(source_filename):
+    print("parse_dependencies(%s)" % (source_filename))
     # Actual parsing is way too slow, so we use regular expressions.
     # The only catch is that we must strip comments and string
     # literals ahead of time.
     with Utils.open_source_file(source_filename, error_handling='ignore') as fh:
         source = fh.read()
     distutils_info = DistutilsInfo(source)
+    print("__pd:m1")
+
     source, literals = strip_string_literals(source)
     source = source.replace('\\\n', ' ').replace('\t', ' ')
+
+    print("__pd:m2")
 
     # TODO: pure mode
     cimports = []
@@ -503,6 +519,7 @@ def parse_dependencies(source_filename):
             externs.append(literals[extern])
         else:
             includes.append(literals[include])
+    print("__pd:m3")
     return cimports, includes, externs, distutils_info
 
 
@@ -565,6 +582,7 @@ class DependencyTree(object):
 
     @cached_method
     def find_pxd(self, module, filename=None):
+        print("__find_pxd(%s,%s)" % (module, filename))
         is_relative = module[0] == '.'
         if is_relative and not filename:
             raise NotImplementedError("New relative imports.")
@@ -589,10 +607,16 @@ class DependencyTree(object):
 
     @cached_method
     def cimported_files(self, filename):
+        # This is where executor.pxd is tested for successfully ...
+        print("__check_theory")
         if filename[-4:] == '.pyx' and path_exists(filename[:-4] + '.pxd'):
             pxd_list = [filename[:-4] + '.pxd']
+            print("__ %s added to list" % (filename[:-4] + '.pxd'))
         else:
             pxd_list = []
+            print("__theory_checked")
+        # After this point, we don't
+
         # Cimports generates all possible combinations package.module
         # when imported as from package cimport module.
         for module in self.cimports(filename):
@@ -601,6 +625,7 @@ class DependencyTree(object):
             pxd_file = self.find_pxd(module, filename)
             if pxd_file is not None:
                 pxd_list.append(pxd_file)
+        print("pxd_list %s", pxd_list)
         return tuple(pxd_list)
 
     @cached_method
@@ -643,7 +668,7 @@ class DependencyTree(object):
             # with arbitrary (random) attributes that would lead to cache
             # misses.
             m.update(str((
-                module.language,
+                    module.language,
                 getattr(module, 'py_limited_api', False),
                 getattr(module, 'np_pythran', False)
             )).encode('UTF-8'))
@@ -654,11 +679,13 @@ class DependencyTree(object):
             return None
 
     def distutils_info0(self, filename):
+        print("__distutils_info0 %s" % (filename))
         info = self.parse_dependencies(filename)[3]
         kwds = info.values
         cimports, externs, incdirs = self.cimports_externs_incdirs(filename)
         basedir = os.getcwd()
         # Add dependencies on "cdef extern from ..." files
+        print("__distutils_info0:m2")
         if externs:
             externs = _make_relative(externs, basedir)
             if 'depends' in kwds:
@@ -667,12 +694,16 @@ class DependencyTree(object):
                 kwds['depends'] = list(externs)
         # Add include_dirs to ensure that the C compiler will find the
         # "cdef extern from ..." files
+        print("__distutils_info0:m3")
+
         if incdirs:
             include_dirs = list(kwds.get('include_dirs', []))
             for inc in _make_relative(incdirs, basedir):
                 if inc not in include_dirs:
                     include_dirs.append(inc)
             kwds['include_dirs'] = include_dirs
+        print("__distutils_info0:m4")
+
         return info
 
     def distutils_info(self, filename, aliases=None, base=None):
@@ -689,26 +720,43 @@ class DependencyTree(object):
             node, extract, merge, seen, {}, self.cimported_files)[0]
 
     def transitive_merge_helper(self, node, extract, merge, seen, stack, outgoing):
+        print("__transitive_merge_helper %s" % (node))
         if node in seen:
+            print("ret1_transitive_merge_helper %s" % (node))
             return seen[node], None
         deps = extract(node)
         if node in stack:
+            print("ret2_transitive_merge_helper %s" % (node))
             return deps, node
         try:
+            print("__tm:m1.1")
             stack[node] = len(stack)
             loop = None
-            for next in outgoing(node):
+            # The function "outgoing", that points to cimported_files sees executor.pxd
+            # but we never add the file to the list of dependencies instead falling back to a later behaviour to find the
+            # pxd file
+            print(deps)
+            print(type(deps))
+            if deps is not None and isinstance(deps, DistutilsInfo):
+                print("__DEPS: %s" % deps.dump())
+            workaround = outgoing(node)
+            for next in workaround:
+                print("tm:loop next=%s" % next)
                 sub_deps, sub_loop = self.transitive_merge_helper(next, extract, merge, seen, stack, outgoing)
                 if sub_loop is not None:
                     if loop is not None and stack[loop] < stack[sub_loop]:
+                        print("going to pass")
                         pass
                     else:
                         loop = sub_loop
                 deps = merge(deps, sub_deps)
+            if deps is not None and isinstance(deps, DistutilsInfo):
+                print("__tm1.2 node=%s _deps:  %s" % (node, deps.dump()))
             if loop == node:
                 loop = None
             if loop is None:
                 seen[node] = deps
+            print("ret3_transitive_merge_helper %s" % (node))
             return deps, loop
         finally:
             del stack[node]
@@ -763,6 +811,8 @@ def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=
     module_list = []
     module_metadata = {}
 
+    print("__create_extension_list:m1")
+
     # workaround for setuptools
     if 'setuptools' in sys.modules:
         Extension_distutils = sys.modules['setuptools.extension']._Extension
@@ -777,6 +827,7 @@ def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=
     create_extension = ctx.options.create_extension or default_create_extension
 
     for pattern in patterns:
+        print("__hippy pattern %s " % (pattern))
         if isinstance(pattern, str):
             filepattern = pattern
             template = Extension(pattern, [])  # Fake Extension without sources
@@ -807,7 +858,11 @@ def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=
                                                         pattern.__class__))
             raise TypeError(msg)
 
+        print("__hoppy:m0")
+
         for file in nonempty(sorted(extended_iglob(filepattern)), "'%s' doesn't match any files" % filepattern):
+            print("__hoppy:file: %s" % (file))
+
             if os.path.abspath(file) in to_exclude:
                 continue
             module_name = deps.fully_qualified_name(file)
@@ -820,9 +875,11 @@ def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=
             Utils.raise_error_if_module_name_forbidden(module_name)
 
             if module_name not in seen:
+                print("__hoppy:filz: %s" % (file))
                 try:
                     kwds = deps.distutils_info(file, aliases, base).values
                 except Exception:
+                    print("__Exception ...")
                     if exclude_failures:
                         continue
                     raise
@@ -833,6 +890,8 @@ def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=
 
                 kwds['name'] = module_name
 
+                print("__hoppy:m1")
+
                 sources = [file] + [m for m in template.sources if m != filepattern]
                 if 'sources' in kwds:
                     # allow users to add .c files etc.
@@ -842,10 +901,14 @@ def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=
                             sources.append(source)
                 kwds['sources'] = sources
 
+                print("__hoppy:m2")
+
                 if ext_language and 'language' not in kwds:
                     kwds['language'] = ext_language
 
                 np_pythran = kwds.pop('np_pythran', False)
+
+                print("__hoppy:m3")
 
                 # Create the new extension
                 m, metadata = create_extension(template, kwds)
@@ -857,6 +920,8 @@ def create_extension_list(patterns, exclude=None, ctx=None, aliases=None, quiet=
                 # Store metadata (this will be written as JSON in the
                 # generated C file but otherwise has no purpose)
                 module_metadata[module_name] = metadata
+
+                print("__hoppy")
 
                 if file not in m.sources:
                     # Old setuptools unconditionally replaces .pyx with .c/.cpp
@@ -938,6 +1003,7 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
                                 ``compiler_directives={'embedsignature': True}``.
                                 See :ref:`compiler-directives`.
     """
+    print("__cythonize")
     if exclude is None:
         exclude = []
     if 'include_path' not in options:
@@ -955,6 +1021,7 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
     cpp_options = CompilationOptions(**options); cpp_options.cplus = True
     ctx = c_options.create_context()
     options = c_options
+    print("__cythonize: Creating extension List")
     module_list, module_metadata = create_extension_list(
         module_list,
         exclude=exclude,
@@ -963,7 +1030,9 @@ def cythonize(module_list, exclude=None, nthreads=0, aliases=None, quiet=False, 
         exclude_failures=exclude_failures,
         language=language,
         aliases=aliases)
+    print("__cythonize: Creating dependency tree")
     deps = create_dependency_tree(ctx, quiet=quiet)
+    print("__cythonize: create_dependency_tree done")
     build_dir = getattr(options, 'build_dir', None)
 
     def copy_to_build_dir(filepath, root=os.getcwd()):
@@ -1192,9 +1261,11 @@ def cythonize_one(pyx_file, c_file, fingerprint, quiet, options=None,
 
     any_failures = 0
     try:
+        print("compiling single(%s ...)" % (pyx_file))
         result = compile_single(pyx_file, options, full_module_name=full_module_name)
         if result.num_errors > 0:
             any_failures = 1
+        print("compiled single(%s ...)" % (pyx_file))
     except (EnvironmentError, PyrexError) as e:
         sys.stderr.write('%s\n' % e)
         any_failures = 1

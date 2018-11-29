@@ -510,7 +510,9 @@ def run_pipeline(source, options, full_module_name=None, context=None):
         pipeline = Pipeline.create_pyx_pipeline(context, options, result)
 
     context.setup_errors(options, result)
+    print("Running pipeline ...")
     err, enddata = Pipeline.run_pipeline(pipeline, source)
+    print("Ran pipeline.")
     context.teardown_errors(err, options, result)
     return result
 

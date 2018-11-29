@@ -15,7 +15,7 @@ debug_trace_code_generation = 0
 debug_no_exception_intercept = 0
 
 # Print a message each time a new stage in the pipeline is entered.
-debug_verbose_pipeline = 0
+debug_verbose_pipeline = 1
 
 # Raise an exception when an error is encountered.
-debug_exception_on_error = 0
+debug_exception_on_error = 1
